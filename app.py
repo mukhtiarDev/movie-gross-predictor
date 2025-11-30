@@ -7,173 +7,147 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 
+# ---------------- CONFIG ---------------- #
 st.set_page_config(layout="wide", page_title="Movie Gross Predictor")
-
-# 🌟 CUSTOM CSS INJECTION TO REDUCE VERTICAL SPACING 🌟
-# This targets the margins/padding above the st.header (h2) and st.subheader (h3) elements.
-st.markdown("""
-<style>
-    /* Target h2 (st.header) and reduce its top margin */
-    h2 {
-        margin-top: 1rem !important;
-        padding-top: 0 !important;
-    }
-    /* Target h3 (st.subheader) and significantly reduce its top margin */
-    h3 {
-        margin-top: 0.5rem !important; /* Reduced from default 1.5rem */
-        padding-top: 0 !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-# -------------------------------------------------------------
-
 TARGET = "gross"
-FEATURES = ['budget','votes','score','runtime','genre','rating','country']
+FEATURES = ['budget','votes','score','runtime','genre','rating','country','director','writer','star','year']
+encoder_maps = {}
 
-st.title("🎬 Movie Gross Revenue Prediction (Cleaned & Reduced Version)")
+# ---------------- LOAD DATA ---------------- #
+@st.cache_data
+def load_data():
+    return pd.read_csv("movies.csv")
 
-# ============================================================
-# 1) LOAD & SHOW RAW PROBLEMS
-# ============================================================
+df_raw = load_data()
+st.title("🎬 Movie Gross Revenue Prediction")
 
-def load_data(path):
-    df = pd.read_csv(path)
-    return df
-
-df_raw = load_data("movies.csv")
-
-st.header("1. Raw Data Quality Check")
-
-# Missing values
-st.subheader("🔍 Missing Values (Raw Data)")
+# ---------------- DATA QUALITY CHECK ---------------- #
+st.header("1️⃣ Data Quality Check (Before Cleaning)")
+st.subheader("Missing Values")
 st.write(df_raw.isnull().sum())
 
-# Duplicate rows
-st.subheader("🔂 Duplicate Rows (Raw Data)")
-dups = df_raw[df_raw.duplicated()]
-st.write(dups if not dups.empty else "No duplicate rows found.")
+st.subheader("Duplicate Rows")
+st.write(df_raw[df_raw.duplicated()])
 
-# Invalid date parsing
-df_raw["clean_released"] = df_raw["released"].str.replace(r"\s*\(.*\)", "", regex=True)
-df_raw["parsed_released"] = pd.to_datetime(df_raw["clean_released"], errors="coerce")
+# ---------------- CLEAN DATA ---------------- #
+st.header("2️⃣ Clean Data")
+def clean_data(df):
+    df = df.copy()
+    # Drop unused columns
+    drop_cols = ['name','company']
+    df.drop(columns=[c for c in drop_cols if c in df.columns], inplace=True)
+    # Convert numeric columns
+    for col in ["budget","votes","gross","runtime","score"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    df.dropna(subset=["budget","votes","gross","runtime","score"], inplace=True)
+    df = df[(df["budget"]>0) & (df["votes"]>0)]
+    # Fill categorical features
+    for col in ["genre","rating","country","director","writer","star"]:
+        if col in df.columns:
+            df[col] = df[col].fillna("Unknown")
+    # Encode categoricals
+    for col in FEATURES:
+        if col in df.columns and df[col].dtype == object:
+            le = LabelEncoder()
+            df[col] = le.fit_transform(df[col])
+            encoder_maps[col] = {label: idx for idx, label in enumerate(le.classes_)}
+            encoder_maps[f"{col}_options"] = le.classes_.tolist()
+    # Scale budget & gross
+    df["budget"] /= 1_000_000
+    df["gross"]  /= 1_000_000
+    # Add year if missing
+    if "year" not in df.columns:
+        df["year"] = 2025
+    return df
 
-invalid_dates = df_raw[df_raw["parsed_released"].isna() & df_raw["clean_released"].notna()]
-st.subheader("📅 Invalid Date Format (Raw Data)")
-st.write(invalid_dates[["released","clean_released"]].head() if not invalid_dates.empty else "No invalid dates found.")
-
-# ============================================================
-# 2) CLEAN DATA
-# ============================================================
-
-st.header("2. Cleaning Data")
-
-df = df_raw.copy()
-
-# Drop unused columns
-df = df.drop(columns=['name','writer','director','star','company','year'], errors='ignore')
-
-# Numeric conversions
-df['budget'] = pd.to_numeric(df['budget'], errors='coerce')
-df['votes'] = pd.to_numeric(df['votes'], errors='coerce')
-
-# Remove rows missing core numerics
-df.dropna(subset=['budget','votes','score','runtime',TARGET], inplace=True)
-
-# Remove zeros
-df = df[(df['budget'] > 0) & (df['votes'] > 0)]
-
-# Clean/parse dates
-df["clean_released"] = df["released"].str.replace(r"\s*\(.*\)", "", regex=True)
-df["parsed_released"] = pd.to_datetime(df["clean_released"], errors="coerce")
-
-# Fill missing categoricals
-for col in ['genre','rating','country']:
-    df[col] = df[col].fillna("Unknown")
-
-# Drop duplicates
-df.drop_duplicates(inplace=True)
-
-# Scale to millions
-df['budget'] /= 1_000_000
-df['gross'] /= 1_000_000
-
-# Encode categoricals
-for col in FEATURES:
-    if df[col].dtype == "object":
-        df[col] = LabelEncoder().fit_transform(df[col])
-
-# ============================================================
-# 3) SHOW ISSUES AFTER CLEANING
-# ============================================================
-
-st.header("3. Quality Check After Cleaning")
-
-st.subheader("Missing Values After Clean")
+df = clean_data(df_raw)
+st.subheader("Post-cleaning Missing Values")
 st.write(df.isnull().sum())
+st.subheader("Duplicate Rows After Cleaning")
+st.write(df[df.duplicated()])
 
-st.subheader("Duplicate Rows After Clean")
-dups_after = df[df.duplicated()]
-st.write(dups_after if not dups_after.empty else "None")
+# ---------------- MODEL TRAINING ---------------- #
+st.header("3️⃣ Linear Regression Model")
+test_size = st.slider("Test Size", 0.05, 0.5, 0.2, 0.05)
 
-invalid_after = df[df["parsed_released"].isna() & df["clean_released"].notna()]
-st.subheader("Invalid Dates After Clean")
-st.write(invalid_after if not invalid_after.empty else "None")
-
-# ============================================================
-# 4) TRAIN MODEL
-# ============================================================
-
-st.header("4. Model Training & Evaluation")
-
-X = df[FEATURES]
-y = df[TARGET]
-
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
+X, y = df[FEATURES], df[TARGET]
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
 model = LinearRegression()
 model.fit(X_train, y_train)
 y_pred = model.predict(X_test)
 
-# Metrics
 r2 = r2_score(y_test, y_pred)
-n = len(y_test)
-k = X_test.shape[1]
-adj_r2 = 1 - (1-r2) * (n-1) / (n-k-1)
 mse = mean_squared_error(y_test, y_pred)
 rmse = np.sqrt(mse)
 mae = mean_absolute_error(y_test, y_pred)
 
-st.subheader("📊 Model Metrics")
-st.write({
-    "R-squared (R²)": round(r2,4),
-    "Adjusted R²": round(adj_r2,4),
-    "MSE": round(mse,4),
-    "RMSE": round(rmse,4),
-    "MAE (Millions)": round(mae,4)
-})
+st.subheader("Model Metrics")
+c1,c2,c3,c4 = st.columns(4)
+c1.metric("R²", f"{r2:.4f}")
+c2.metric("MSE", f"{mse:.4f}")
+c3.metric("RMSE", f"{rmse:.4f}")
+c4.metric("MAE", f"{mae:.4f}")
 
-# ============================================================
-# 5) PLOTS
-# ============================================================
-
-st.header("5. Plots")
-
-# Actual vs predicted
+# ---------------- PLOTS ---------------- #
+st.header("4️⃣ Plots")
 fig1, ax1 = plt.subplots()
-ax1.scatter(y_test, y_pred, alpha=0.6)
-max_val = max(y_test.max(), y_pred.max())
-ax1.plot([0,max_val],[0,max_val], linestyle='--')
+ax1.scatter(y_test, y_pred, alpha=0.7)
+m = max(y_test.max(), y_pred.max())
+ax1.plot([0,m],[0,m],'r--')
 ax1.set_xlabel("Actual")
 ax1.set_ylabel("Predicted")
 ax1.set_title("Actual vs Predicted")
-st.pyplot(fig1)
 
-# Residuals plot
-residuals = y_test - y_pred
 fig2, ax2 = plt.subplots()
+residuals = y_test - y_pred
 ax2.scatter(y_pred, residuals, alpha=0.6)
-ax2.axhline(0, linestyle='--')
+ax2.axhline(0, color="black", linestyle="--")
 ax2.set_xlabel("Predicted")
 ax2.set_ylabel("Residuals")
 ax2.set_title("Residual Plot")
+
+st.pyplot(fig1)
 st.pyplot(fig2)
+
+# ---------------- NEW MOVIE PREDICTION ---------------- #
+st.header("5️⃣ Predict New Movie Revenue")
+with st.form("prediction"):
+    c1,c2 = st.columns(2)
+    budget = c1.number_input("Budget (Millions)", 0.1, value=30.0)
+    votes  = c1.number_input("Votes", 100, value=100000)
+    score  = c2.slider("IMDb Score", 1.0, 10.0, 7.0)
+    runtime = c2.number_input("Runtime (min)", 40, value=110)
+    
+    g,r,c = st.columns(3)
+    genre   = g.selectbox("Genre", encoder_maps["genre_options"])
+    rating  = r.selectbox("Rating", encoder_maps["rating_options"])
+    country = c.selectbox("Country", encoder_maps["country_options"])
+    
+    director = st.text_input("Director", "Unknown")
+    writer   = st.text_input("Writer", "Unknown")
+    star     = st.text_input("Star", "Unknown")
+    year     = st.number_input("Year", 1900, 2030, 2025)
+
+    submit = st.form_submit_button("Predict")
+    
+    if submit:
+        data = {
+            "budget": budget,
+            "votes": votes,
+            "score": score,
+            "runtime": runtime,
+            "genre": encoder_maps["genre"].get(genre,0),
+            "rating": encoder_maps["rating"].get(rating,0),
+            "country": encoder_maps["country"].get(country,0),
+            "director": encoder_maps["director"].get(director,0),
+            "writer": encoder_maps["writer"].get(writer,0),
+            "star": encoder_maps["star"].get(star,0),
+            "year": year
+        }
+        input_df = pd.DataFrame([data])[FEATURES]  # ensure correct order
+        pred = model.predict(input_df)[0]
+        if pred < 0:
+            st.warning(f"Predicted Gross: ${pred:.2f}M (Check Inputs)")
+        else:
+            st.success(f"🎬 Predicted Gross Revenue: **${pred:.2f} Million**")
