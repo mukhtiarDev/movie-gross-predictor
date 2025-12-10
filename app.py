@@ -310,7 +310,7 @@ elif st.session_state.page == "Logistic Regression":
     with col1:
         st.pyplot(plot_confusion(y_test, y_pred, "Logistic Regression Confusion Matrix"))
     with col2:
-        st.pyplot(plot_roc(model, X_test, y_test, "Logistic Regression ROC Curve"))
+        st.pyplot(plot_roc(model, X_test_scaled, y_test, "Logistic Regression ROC Curve"))
 
 # ================== COMPARISON ==================
 elif st.session_state.page == "Comparison":
