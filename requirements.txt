@@ -4,4 +4,4 @@ scikit-learn
 matplotlib
 seaborn
 numpy
-
+imbalanced-learn==0.12.2
