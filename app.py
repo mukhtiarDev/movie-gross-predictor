@@ -12,7 +12,6 @@ from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     confusion_matrix, roc_curve, auc
 )
-from imblearn.over_sampling import SMOTE
 
 # ================== PAGE CONFIG ==================
 st.set_page_config(layout="wide", page_title="Movie Revenue AI", page_icon="🎬")
@@ -171,8 +170,6 @@ if st.session_state.page == "Home":
 elif st.session_state.page == "Linear Regression":
     st.header("📈 Linear Regression")
     st.button("Back", on_click=go, args=("Home",))
-    
-    st.info("ℹ️ SMOTE is NOT used here - this is a REGRESSION problem (predicting continuous revenue values)")
 
     test_size = st.slider("Test Size", 0.1, 0.5, 0.2)
 
@@ -184,6 +181,7 @@ elif st.session_state.page == "Linear Regression":
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
 
+    # --- METRICS & PLOTS ---
     r2 = r2_score(y_test, y_pred)
     mse = mean_squared_error(y_test, y_pred)
     rmse = np.sqrt(mse)
@@ -213,31 +211,69 @@ elif st.session_state.page == "Linear Regression":
         ax2.set_title("Residual Plot")
         st.pyplot(fig2)
 
+    # --- NEW: USER PREDICTION SECTION ---
+    st.markdown("---")
+    st.subheader("🎬 Predict Revenue for a New Movie")
+    st.markdown("Enter the movie details below to get a revenue forecast:")
+
+    with st.form("revenue_pred_form"):
+        c_A, c_B, c_C, c_D = st.columns(4)
+        with c_A:
+            in_budget = st.number_input("Budget ($ Millions)", min_value=0.1, max_value=500.0, value=50.0)
+            in_votes = st.number_input("IMDb Votes", min_value=0, value=10000)
+        with c_B:
+            in_score = st.slider("IMDb Score", 0.0, 10.0, 6.5)
+            in_runtime = st.number_input("Runtime (min)", min_value=10, value=100)
+        with c_C:
+            in_genre = st.selectbox("Genre", encoders['genre'].classes_)
+            in_rating = st.selectbox("Rating", encoders['rating'].classes_)
+        with c_D:
+            in_country = st.selectbox("Country", encoders['country'].classes_)
+            in_year = st.number_input("Year", min_value=1900, max_value=2030, value=2024)
+
+        submit_btn = st.form_submit_button("💰 Predict Revenue")
+
+    if submit_btn:
+        # Encode categorical inputs
+        try:
+            val_genre = encoders['genre'].transform([in_genre])[0]
+            val_rating = encoders['rating'].transform([in_rating])[0]
+            val_country = encoders['country'].transform([in_country])[0]
+
+            # Create input array
+            input_data = np.array([[in_budget, in_votes, in_score, in_runtime, 
+                                    val_genre, val_rating, val_country, in_year]])
+            
+            # Predict
+            pred_rev = model.predict(input_data)[0]
+            
+            # Display Result
+            st.success(f"### Predicted Revenue: ${pred_rev:,.2f} Million")
+            
+            # Optional: Visual Context
+            if pred_rev > median_threshold:
+                 st.balloons()
+                 st.write(f"🎉 This exceeds the median industry revenue of ${median_threshold:.2f}M!")
+            else:
+                 st.write(f"⚠️ This is below the median industry revenue of ${median_threshold:.2f}M.")
+        except Exception as e:
+            st.error(f"Error in prediction: {e}")
+
 # ================== RANDOM FOREST ==================
 elif st.session_state.page == "Random Forest":
     st.header("🌲 Random Forest Classifier")
     st.button("Back", on_click=go, args=("Home",))
     
-    st.info("ℹ️ SMOTE is NOT used here - Random Forest handles class imbalance naturally with class_weight='balanced'")
-
     X = df[FEATURES]
     y = df["is_hit"]
-
-    # Show class distribution
-    with st.expander("📊 Class Distribution"):
-        class_counts = pd.Series(y).value_counts()
-        st.write(f"**Class 0 (Flop):** {class_counts[0]} samples ({class_counts[0]/len(y)*100:.1f}%)")
-        st.write(f"**Class 1 (Hit):** {class_counts[1]} samples ({class_counts[1]/len(y)*100:.1f}%)")
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
     
-    # ✅ CORRECTED: Using class_weight instead of SMOTE
     model = RandomForestClassifier(
         n_estimators=100, 
-        random_state=42,
-        class_weight='balanced'  # Handles imbalance automatically
+        random_state=42
     )
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
@@ -257,21 +293,13 @@ elif st.session_state.page == "Random Forest":
 
 # ================== LOGISTIC REGRESSION ==================
 elif st.session_state.page == "Logistic Regression":
-    st.header("📊 Logistic Regression (with SMOTE)")
+    st.header("📊 Logistic Regression")
     st.button("Back", on_click=go, args=("Home",))
     
-    st.success("✅ SMOTE is CORRECTLY applied here - only on training data AFTER splitting!")
-
     X = df[FEATURES]
     y = df["is_hit"]
 
-    # Show original class distribution
-    with st.expander("📊 Class Distribution (Before SMOTE)"):
-        class_counts = pd.Series(y).value_counts()
-        st.write(f"**Class 0 (Flop):** {class_counts[0]} samples ({class_counts[0]/len(y)*100:.1f}%)")
-        st.write(f"**Class 1 (Hit):** {class_counts[1]} samples ({class_counts[1]/len(y)*100:.1f}%)")
-
-    # ✅ CORRECTED: Split FIRST, then apply SMOTE only to training data
+    # Split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
@@ -281,22 +309,11 @@ elif st.session_state.page == "Logistic Regression":
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)  # Use fitted scaler
     
-    # Apply SMOTE ONLY to training data
-    smote = SMOTE(random_state=42)
-    X_train_resampled, y_train_resampled = smote.fit_resample(X_train_scaled, y_train)
-    
-    # Show resampled distribution
-    with st.expander("📊 Class Distribution (After SMOTE on Training Data)"):
-        resampled_counts = pd.Series(y_train_resampled).value_counts()
-        st.write(f"**Class 0 (Flop):** {resampled_counts[0]} samples ({resampled_counts[0]/len(y_train_resampled)*100:.1f}%)")
-        st.write(f"**Class 1 (Hit):** {resampled_counts[1]} samples ({resampled_counts[1]/len(y_train_resampled)*100:.1f}%)")
-        st.write("⚠️ Note: Test data remains unchanged (no SMOTE applied)")
-
-    # Train on resampled data
+    # Train on standard scaled data
     model = LogisticRegression(max_iter=1000, random_state=42)
-    model.fit(X_train_resampled, y_train_resampled)
+    model.fit(X_train_scaled, y_train)
     
-    # Test on ORIGINAL test data (no SMOTE)
+    # Test
     y_pred = model.predict(X_test_scaled)
 
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -328,18 +345,17 @@ elif st.session_state.page == "Comparison":
     lin = LinearRegression().fit(X_train_r, y_train_r)
     pred_reg = (lin.predict(X_test_r) > median_threshold).astype(int)
 
-    # Random Forest (with class_weight)
+    # Random Forest
     X_train_c, X_test_c, y_train_c, y_test_c = train_test_split(
         X, y_cls, test_size=0.2, random_state=42, stratify=y_cls
     )
     rf = RandomForestClassifier(
         n_estimators=100, 
-        random_state=42,
-        class_weight='balanced'
+        random_state=42
     ).fit(X_train_c, y_train_c)
     pred_rf = rf.predict(X_test_c)
 
-    # Logistic Regression (with SMOTE - CORRECTED)
+    # Logistic Regression
     X_train_s, X_test_s, y_train_s, y_test_s = train_test_split(
         X, y_cls, test_size=0.2, random_state=42, stratify=y_cls
     )
@@ -347,15 +363,12 @@ elif st.session_state.page == "Comparison":
     X_train_scaled = scaler.fit_transform(X_train_s)
     X_test_scaled = scaler.transform(X_test_s)
     
-    smote = SMOTE(random_state=42)
-    X_train_resampled, y_train_resampled = smote.fit_resample(X_train_scaled, y_train_s)
-    
     log = LogisticRegression(max_iter=1000, random_state=42).fit(
-        X_train_resampled, y_train_resampled
+        X_train_scaled, y_train_s
     )
     pred_log = log.predict(X_test_scaled)
 
-    models = ["Linear (Thresholded)", "Random Forest", "Logistic (SMOTE)"]
+    models = ["Linear (Thresholded)", "Random Forest", "Logistic Regression"]
     accs = [
         accuracy_score(y_test_c, pred_reg),
         accuracy_score(y_test_c, pred_rf),
@@ -381,11 +394,3 @@ elif st.session_state.page == "Comparison":
 
     best_model = models[np.argmax(accs)]
     st.success(f"🏆 Best Model Based on Accuracy: {best_model}")
-    
-    st.info("""
-    **Key Corrections Applied:**
-    1. ✅ SMOTE applied AFTER splitting data (prevents data leakage)
-    2. ✅ SMOTE only on training data, test data remains original
-    3. ✅ Random Forest uses class_weight='balanced' instead of SMOTE
-    4. ✅ Linear Regression doesn't use SMOTE (it's for regression, not classification)
-    """)
